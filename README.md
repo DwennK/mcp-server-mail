@@ -40,6 +40,7 @@ MCP Server for the Infomaniak Mail API.
      - `subject` (string): Email subject
      - `body` (string): Email body (plain text)
    - Optional inputs:
+     - `mailbox_uuid` (string): Mailbox UUID (uses primary if omitted)
      - `cc` (string): CC recipient(s), comma-separated
      - `bcc` (string): BCC recipient(s), comma-separated
    - Returns: Send confirmation with timestamp

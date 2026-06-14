@@ -6,10 +6,7 @@ const API_BASE = "https://mail.infomaniak.com/api";
 export class MailClient {
     private readonly headers: { Authorization: string; "Content-Type": string };
     private mailboxUuid: string | null = null;
-    private hostingId: number | null = null;
-    private mailboxName: string | null = null;
-    private fromEmail: string | null = null;
-    private fromName: string | null = null;
+    private mailboxes: any[] = [];
 
     constructor(token: string) {
         this.headers = {
@@ -49,12 +46,9 @@ export class MailClient {
             throw new Error("No mailboxes found. Check your MAIL_TOKEN.");
         }
 
-        const mailbox = mailboxesResponse.data[0];
+        this.mailboxes = mailboxesResponse.data || [];
+        const mailbox = this.mailboxes[0];
         this.mailboxUuid = mailbox.uuid;
-        this.hostingId = mailbox.hosting_id;
-        this.mailboxName = mailbox.mailbox;
-        this.fromEmail = mailbox.email;
-        this.fromName = mailbox.email.split("@")[0];
     }
 
     getMailboxUuid(): string {
@@ -91,15 +85,24 @@ export class MailClient {
         return mimeTypes[ext] || "application/octet-stream";
     }
 
-    async uploadAttachment(filePath: string): Promise<string> {
-        if (!this.mailboxUuid) throw new Error("Mailbox not initialized");
+    private getMailboxInfo(mailboxUuid: string) {
+        const mb = (this.mailboxes || []).find((m: any) => m.uuid === mailboxUuid);
+        if (!mb) {
+            throw new Error(`Mailbox not found: ${mailboxUuid}`);
+        }
+        return mb;
+    }
+
+    async uploadAttachment(filePath: string, mailboxUuid?: string): Promise<string> {
+        const uuid = mailboxUuid || this.mailboxUuid;
+        if (!uuid) throw new Error("Mailbox not initialized");
 
         const fileBuffer = fs.readFileSync(filePath);
         const fileName = path.basename(filePath);
         const mimeType = this.getMimeType(fileName);
 
         const response = await this.apiRequest(
-            `/mail/${this.mailboxUuid}/draft/attachment`,
+            `/mail/${uuid}/draft/attachment`,
             {
                 method: "POST",
                 body: fileBuffer,
@@ -122,10 +125,13 @@ export class MailClient {
     }
 
     async listMailboxes(): Promise<any[]> {
-        const response = await this.apiRequest(
-            "/mailbox?with=aliases,permissions,accountId,count_users",
-        );
-        return (response.data || []).map((m: any) => ({
+        if (!this.mailboxes?.length) {
+            const response = await this.apiRequest(
+                "/mailbox?with=aliases,permissions,accountId,count_users",
+            );
+            this.mailboxes = response.data || [];
+        }
+        return (this.mailboxes || []).map((m: any) => ({
             uuid: m.uuid,
             email: m.email,
             mailbox: m.mailbox,
@@ -222,8 +228,14 @@ export class MailClient {
         cc?: string,
         bcc?: string,
         attachments?: string[],
+        mailboxUuid?: string,
     ): Promise<any> {
-        if (!this.mailboxUuid) throw new Error("Mailbox not initialized");
+        const uuid = mailboxUuid || this.mailboxUuid;
+        if (!uuid) throw new Error("Mailbox not initialized");
+
+        const mbInfo = this.getMailboxInfo(uuid);
+        const fromEmail = mbInfo.email;
+        const fromName = mbInfo.email.split("@")[0];
 
         const toRecipients = to.split(",").map((email) => ({
             name: "",
@@ -246,12 +258,12 @@ export class MailClient {
             mime_type: "text/html",
             from: {
                 id: null,
-                name: this.fromName,
-                email: this.fromEmail,
+                name: fromName,
+                email: fromEmail,
             },
             reply_to: {
-                name: this.fromName,
-                email: this.fromEmail,
+                name: fromName,
+                email: fromEmail,
             },
             to: toRecipients,
             cc: ccRecipients,
@@ -275,7 +287,7 @@ export class MailClient {
         };
 
         const draftResponse = await this.apiRequest(
-            `/mail/${this.mailboxUuid}/draft`,
+            `/mail/${uuid}/draft`,
             {
                 method: "POST",
                 body: JSON.stringify(draftPayload),
@@ -294,7 +306,7 @@ export class MailClient {
         const attachmentUuids: string[] = [];
         if (attachments && attachments.length > 0) {
             for (const filePath of attachments) {
-                const attachmentUuid = await this.uploadAttachment(filePath);
+                const attachmentUuid = await this.uploadAttachment(filePath, uuid);
                 attachmentUuids.push(attachmentUuid);
             }
         }
@@ -303,13 +315,13 @@ export class MailClient {
             ...draftPayload,
             uuid: draftUuid,
             uid: draftUid,
-            resource: `/api/mail/${this.mailboxUuid}/draft/${draftUuid}`,
+            resource: `/api/mail/${uuid}/draft/${draftUuid}`,
             attachments: attachmentUuids,
             action: "save",
         };
 
         await this.apiRequest(
-            `/mail/${this.mailboxUuid}/draft/${draftUuid}`,
+            `/mail/${uuid}/draft/${draftUuid}`,
             {
                 method: "PUT",
                 body: JSON.stringify(updatePayload),
@@ -322,7 +334,7 @@ export class MailClient {
         };
 
         const sendResponse = await this.apiRequest(
-            `/mail/${this.mailboxUuid}/draft/${draftUuid}`,
+            `/mail/${uuid}/draft/${draftUuid}`,
             {
                 method: "PUT",
                 body: JSON.stringify(sendPayload),

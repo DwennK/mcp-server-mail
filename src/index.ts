@@ -149,9 +149,13 @@ server.tool(
             .array(z.string())
             .describe("Array of local file paths to attach to the email")
             .optional(),
+        mailbox_uuid: z
+            .string()
+            .describe("Mailbox UUID (optional, uses primary if omitted)")
+            .optional(),
     },
-    async ({to, subject, body, cc, bcc, attachments}) => {
-        const result = await mailClient.sendEmail(to, subject, body, cc, bcc, attachments);
+    async ({to, subject, body, cc, bcc, attachments, mailbox_uuid}) => {
+        const result = await mailClient.sendEmail(to, subject, body, cc, bcc, attachments, mailbox_uuid);
         return {
             content: [
                 {
