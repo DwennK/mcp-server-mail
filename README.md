@@ -45,6 +45,46 @@ MCP Server for the Infomaniak Mail API.
      - `bcc` (string): BCC recipient(s), comma-separated
    - Returns: Send confirmation with timestamp
 
+6. `mail_create_draft`
+   - Create a new email draft
+   - Required inputs:
+     - `to` (string): Recipient email address(es), comma-separated
+     - `subject` (string): Draft subject
+     - `body` (string): Draft body (plain text)
+   - Optional inputs:
+     - `mailbox_uuid` (string): Mailbox UUID (uses primary if omitted)
+     - `cc` (string): CC recipient(s), comma-separated
+     - `bcc` (string): BCC recipient(s), comma-separated
+   - Returns: Draft UUID and UID for later update/send
+
+7. `mail_update_draft`
+   - Update an existing email draft (only provide fields to change)
+   - Required inputs:
+     - `draft_uuid` (string): Draft UUID to update
+   - Optional inputs:
+     - `to` (string), `subject` (string), `body` (string)
+     - `cc` (string), `bcc` (string)
+     - `attachments` (string[]): Local file paths to attach
+   - Returns: Updated draft info
+
+8. `mail_send_draft`
+   - Send an existing email draft
+   - Required inputs:
+     - `draft_uuid` (string): Draft UUID to send
+   - Optional inputs:
+     - `delay` (number): Delay in seconds before sending (default: 0)
+   - Returns: Send confirmation with scheduled time
+
+9. `mail_delete_draft`
+   - Delete an email draft
+   - Required inputs:
+     - `draft_uuid` (string): Draft UUID to delete
+   - Returns: Deletion confirmation
+
+10. `mail_list_drafts`
+    - List all drafts in the mailbox
+    - Returns: Draft threads with subject, date, and message UID
+
 ## Setup
 
 1. Create a token linked to your user:

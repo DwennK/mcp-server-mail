@@ -7,12 +7,25 @@ export class MailClient {
     private readonly headers: { Authorization: string; "Content-Type": string };
     private mailboxUuid: string | null = null;
     private mailboxes: any[] = [];
+    private readonly draftsCache: Map<string, any> = new Map();
 
     constructor(token: string) {
         this.headers = {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
         };
+    }
+
+    private parseRecipients(recipientString?: string): any[] | null {
+        if (!recipientString) return null;
+        return recipientString.split(",").map((email) => ({
+            name: "",
+            email: email.trim(),
+        }));
+    }
+
+    private createHtmlBody(body: string): string {
+        return `<html><body><div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 14px;">${body.replace(/\n/g, "<br>")}</div></body></html>`;
     }
 
     private async apiRequest(path: string, options: RequestInit = {}): Promise<any> {
@@ -231,27 +244,34 @@ export class MailClient {
         attachments?: string[],
         mailboxUuid?: string,
     ): Promise<any> {
-        const uuid = mailboxUuid || await this.getMailboxUuid();
-        if (!uuid) throw new Error("Mailbox not initialized");
+        const draftInfo = await this.createDraft(to, subject, body, cc, bcc, mailboxUuid);
 
+        if (attachments && attachments.length > 0) {
+            await this.updateDraft(draftInfo.uuid, { attachments }, mailboxUuid);
+        }
+
+        return this.sendDraft(draftInfo.uuid, 0, mailboxUuid);
+    }
+
+    async createDraft(
+        to: string,
+        subject: string,
+        body: string,
+        cc?: string,
+        bcc?: string,
+        mailboxUuid?: string,
+    ): Promise<any> {
+        const uuid = mailboxUuid || await this.getMailboxUuid();
         const mbInfo = this.getMailboxInfo(uuid);
         const fromEmail = mbInfo.email;
         const fromName = mbInfo.email.split("@")[0];
 
-        const toRecipients = to.split(",").map((email) => ({
-            name: "",
-            email: email.trim(),
-        }));
-        const ccRecipients = cc
-            ? cc.split(",").map((email) => ({name: "", email: email.trim()}))
-            : null;
-        const bccRecipients = bcc
-            ? bcc.split(",").map((email) => ({name: "", email: email.trim()}))
-            : null;
+        const toRecipients = this.parseRecipients(to);
+        const ccRecipients = this.parseRecipients(cc);
+        const bccRecipients = this.parseRecipients(bcc);
+        const htmlBody = this.createHtmlBody(body);
 
-        const htmlBody = `<html><body><div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; font-size: 14px;">${body.replace(/\n/g, "<br>")}</div></body></html>`;
-
-        const draftPayload: any = {
+        const payload: any = {
             uuid: null,
             subject,
             body: htmlBody,
@@ -287,67 +307,171 @@ export class MailClient {
             delay: 0,
         };
 
-        const draftResponse = await this.apiRequest(
-            `/mail/${uuid}/draft`,
-            {
-                method: "POST",
-                body: JSON.stringify(draftPayload),
-            },
-        );
+        const response = await this.apiRequest(`/mail/${uuid}/draft`, {
+            method: "POST",
+            body: JSON.stringify(payload),
+        });
 
-        if (draftResponse.result !== "success") {
+        if (response.result !== "success") {
+            throw new Error(`Failed to create draft: ${JSON.stringify(response)}`);
+        }
+
+        const draftUuid = response.data.uuid;
+        payload.uuid = draftUuid;
+        payload.uid = response.data.uid;
+        this.draftsCache.set(draftUuid, payload);
+
+        return {
+            uuid: draftUuid,
+            uid: response.data.uid,
+            subject,
+            body,
+            to,
+            cc,
+            bcc,
+        };
+    }
+
+    async updateDraft(
+        draftUuid: string,
+        options: {
+            to?: string;
+            subject?: string;
+            body?: string;
+            cc?: string;
+            bcc?: string;
+            attachments?: string[];
+        },
+        mailboxUuid?: string,
+    ): Promise<any> {
+        const uuid = mailboxUuid || await this.getMailboxUuid();
+        const cached = this.draftsCache.get(draftUuid);
+
+        if (!cached) {
             throw new Error(
-                `Failed to create draft: ${JSON.stringify(draftResponse)}`,
+                `Draft ${draftUuid} not found in cache. ` +
+                `Please recreate the draft or provide the full draft state.`,
             );
         }
 
-        const draftUuid = draftResponse.data.uuid;
-        const draftUid = draftResponse.data.uid;
+        const payload = { ...cached };
 
-        const attachmentUuids: string[] = [];
-        if (attachments && attachments.length > 0) {
-            for (const filePath of attachments) {
+        if (options.to !== undefined) {
+            payload.to = this.parseRecipients(options.to);
+        }
+        if (options.subject !== undefined) {
+            payload.subject = options.subject;
+        }
+        if (options.body !== undefined) {
+            payload.body = this.createHtmlBody(options.body);
+        }
+        if (options.cc !== undefined) {
+            payload.cc = this.parseRecipients(options.cc);
+        }
+        if (options.bcc !== undefined) {
+            payload.bcc = this.parseRecipients(options.bcc);
+        }
+
+        payload.action = "save";
+        payload.uuid = draftUuid;
+        payload.resource = `/api/mail/${uuid}/draft/${draftUuid}`;
+
+        if (options.attachments && options.attachments.length > 0) {
+            const attachmentUuids: string[] = [];
+            for (const filePath of options.attachments) {
                 const attachmentUuid = await this.uploadAttachment(filePath, uuid);
                 attachmentUuids.push(attachmentUuid);
             }
+            payload.attachments = attachmentUuids;
         }
 
-        const updatePayload = {
-            ...draftPayload,
+        const response = await this.apiRequest(`/mail/${uuid}/draft/${draftUuid}`, {
+            method: "PUT",
+            body: JSON.stringify(payload),
+        });
+
+        if (response.result !== "success") {
+            throw new Error(`Failed to update draft: ${JSON.stringify(response)}`);
+        }
+
+        payload.uid = response.data?.uid || payload.uid;
+        this.draftsCache.set(draftUuid, payload);
+
+        return {
             uuid: draftUuid,
-            uid: draftUid,
-            resource: `/api/mail/${uuid}/draft/${draftUuid}`,
-            attachments: attachmentUuids,
-            action: "save",
+            uid: payload.uid,
+            subject: payload.subject,
+            body: options.body !== undefined ? options.body : cached.body,
+            to: options.to !== undefined ? options.to : cached.to,
+            cc: options.cc !== undefined ? options.cc : cached.cc,
+            bcc: options.bcc !== undefined ? options.bcc : cached.bcc,
         };
+    }
 
-        await this.apiRequest(
-            `/mail/${uuid}/draft/${draftUuid}`,
-            {
-                method: "PUT",
-                body: JSON.stringify(updatePayload),
-            },
-        );
+    async sendDraft(
+        draftUuid: string,
+        delay: number = 0,
+        mailboxUuid?: string,
+    ): Promise<any> {
+        const uuid = mailboxUuid || await this.getMailboxUuid();
+        const cached = this.draftsCache.get(draftUuid);
 
-        const sendPayload = {
-            ...updatePayload,
-            action: "send",
-        };
-
-        const sendResponse = await this.apiRequest(
-            `/mail/${uuid}/draft/${draftUuid}`,
-            {
-                method: "PUT",
-                body: JSON.stringify(sendPayload),
-            },
-        );
-
-        if (sendResponse.result !== "success") {
+        if (!cached) {
             throw new Error(
-                `Failed to send email: ${JSON.stringify(sendResponse)}`,
+                `Draft ${draftUuid} not found in cache. ` +
+                `Cannot send a draft that was not created in this session.`,
             );
         }
 
-        return sendResponse.data;
+        const payload = { ...cached };
+        payload.action = "send";
+        payload.delay = delay;
+        payload.uuid = draftUuid;
+        payload.resource = `/api/mail/${uuid}/draft/${draftUuid}`;
+
+        const response = await this.apiRequest(`/mail/${uuid}/draft/${draftUuid}`, {
+            method: "PUT",
+            body: JSON.stringify(payload),
+        });
+
+        if (response.result !== "success") {
+            throw new Error(`Failed to send draft: ${JSON.stringify(response)}`);
+        }
+
+        this.draftsCache.delete(draftUuid);
+        return response.data;
+    }
+
+    async deleteDraft(
+        draftUuid: string,
+        mailboxUuid?: string,
+    ): Promise<any> {
+        const uuid = mailboxUuid || await this.getMailboxUuid();
+
+        const response = await this.apiRequest(`/mail/${uuid}/draft/${draftUuid}`, {
+            method: "DELETE",
+        });
+
+        if (response.result !== "success") {
+            throw new Error(`Failed to delete draft: ${JSON.stringify(response)}`);
+        }
+
+        this.draftsCache.delete(draftUuid);
+        return response.data;
+    }
+
+    async listDrafts(mailboxUuid?: string): Promise<any[]> {
+        const uuid = mailboxUuid || await this.getMailboxUuid();
+        const folders = await this.listFolders(uuid);
+
+        const draftsFolder = folders.find(
+            (f: any) => f.role === "draft" || f.role === "DRAFT",
+        );
+
+        if (!draftsFolder) {
+            throw new Error("Drafts folder not found");
+        }
+
+        return this.listEmails(uuid, draftsFolder.id, 50, 0);
     }
 }

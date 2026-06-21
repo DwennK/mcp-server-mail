@@ -165,6 +165,153 @@ server.tool(
     },
 );
 
+server.tool(
+    "mail_create_draft",
+    "Create a new email draft",
+    {
+        to: z
+            .string()
+            .describe("Recipient email address(es), comma-separated"),
+        subject: z.string().describe("Draft subject"),
+        body: z.string().describe("Draft body (plain text)"),
+        cc: z
+            .string()
+            .describe("CC recipient(s), comma-separated")
+            .optional(),
+        bcc: z
+            .string()
+            .describe("BCC recipient(s), comma-separated")
+            .optional(),
+        mailbox_uuid: z
+            .string()
+            .describe("Mailbox UUID (optional, uses primary if omitted)")
+            .optional(),
+    },
+    async ({to, subject, body, cc, bcc, mailbox_uuid}) => {
+        const result = await mailClient.createDraft(to, subject, body, cc, bcc, mailbox_uuid);
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify(result, null, 2),
+                },
+            ],
+        };
+    },
+);
+
+server.tool(
+    "mail_update_draft",
+    "Update an existing email draft. Only fields you want to change need to be provided.",
+    {
+        draft_uuid: z.string().describe("Draft UUID to update"),
+        subject: z.string().describe("New draft subject").optional(),
+        body: z.string().describe("New draft body (plain text)").optional(),
+        to: z.string().describe("New recipient(s), comma-separated").optional(),
+        cc: z.string().describe("New CC recipient(s), comma-separated").optional(),
+        bcc: z.string().describe("New BCC recipient(s), comma-separated").optional(),
+        attachments: z
+            .array(z.string())
+            .describe("Files to attach to the draft")
+            .optional(),
+        mailbox_uuid: z
+            .string()
+            .describe("Mailbox UUID (optional)")
+            .optional(),
+    },
+    async ({draft_uuid, subject, body, to, cc, bcc, attachments, mailbox_uuid}) => {
+        const options: any = {};
+        if (subject !== undefined) options.subject = subject;
+        if (body !== undefined) options.body = body;
+        if (to !== undefined) options.to = to;
+        if (cc !== undefined) options.cc = cc;
+        if (bcc !== undefined) options.bcc = bcc;
+        if (attachments !== undefined) options.attachments = attachments;
+        
+        const result = await mailClient.updateDraft(draft_uuid, options, mailbox_uuid);
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify(result, null, 2),
+                },
+            ],
+        };
+    },
+);
+
+server.tool(
+    "mail_send_draft",
+    "Send an existing email draft",
+    {
+        draft_uuid: z.string().describe("Draft UUID to send"),
+        delay: z
+            .number()
+            .describe("Delay in seconds before sending (default: 0)")
+            .default(0),
+        mailbox_uuid: z
+            .string()
+            .describe("Mailbox UUID (optional)")
+            .optional(),
+    },
+    async ({draft_uuid, delay, mailbox_uuid}) => {
+        const result = await mailClient.sendDraft(draft_uuid, delay, mailbox_uuid);
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify(result, null, 2),
+                },
+            ],
+        };
+    },
+);
+
+server.tool(
+    "mail_delete_draft",
+    "Delete an email draft",
+    {
+        draft_uuid: z.string().describe("Draft UUID to delete"),
+        mailbox_uuid: z
+            .string()
+            .describe("Mailbox UUID (optional)")
+            .optional(),
+    },
+    async ({draft_uuid, mailbox_uuid}) => {
+        const result = await mailClient.deleteDraft(draft_uuid, mailbox_uuid);
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify(result, null, 2),
+                },
+            ],
+        };
+    },
+);
+
+server.tool(
+    "mail_list_drafts",
+    "List all drafts in the mailbox",
+    {
+        mailbox_uuid: z
+            .string()
+            .describe("Mailbox UUID (optional, uses primary if omitted)")
+            .optional(),
+    },
+    async ({mailbox_uuid}) => {
+        const drafts = await mailClient.listDrafts(mailbox_uuid);
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify(drafts, null, 2),
+                },
+            ],
+        };
+    },
+);
+
 async function main() {
     const transport = new StdioServerTransport();
     await server.connect(transport);

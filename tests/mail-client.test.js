@@ -198,13 +198,11 @@ describe("MailClient", () => {
         });
         await client.init();
 
-        // draft create
+        // draft create + send
         fetchMock.enqueue({
             result: "success",
             data: { uuid: "draft-uuid", uid: "draft-uid" },
         });
-        // draft save (update)
-        fetchMock.enqueue({ result: "success" });
         // draft send
         fetchMock.enqueue({
             result: "success",
@@ -230,8 +228,8 @@ describe("MailClient", () => {
         assert.strictEqual(draftBody.subject, "Test Subject");
         assert.strictEqual(draftBody.from.email, "test@test.com");
 
-        // call 3 = draft update (save), call 4 = draft send
-        const sendBody = JSON.parse(calls[3].options.body);
+        // call 2 = draft send
+        const sendBody = JSON.parse(calls[2].options.body);
         assert.strictEqual(sendBody.action, "send");
         assert.strictEqual(result.etop, "2024-01-01T00:00:00+00:00");
     });
@@ -253,12 +251,11 @@ describe("MailClient", () => {
         });
         await client.init();
 
-        // draft create + save + send
+        // draft create + send
         fetchMock.enqueue({
             result: "success",
             data: { uuid: "draft-uuid", uid: "draft-uid" },
         });
-        fetchMock.enqueue({ result: "success" });
         fetchMock.enqueue({
             result: "success",
             data: { etop: "2024-01-01T00:00:00+00:00" },
@@ -396,5 +393,112 @@ describe("MailClient", () => {
         assert.strictEqual(uid, "99");
         assert.ok(!uid.includes("@"), "uid must not contain @");
         assert.ok(!uid.includes("-"), "uid should be a simple sequence number");
+    });
+
+    it("listDrafts finds folder with role DRAFT", async () => {
+        const client = new MailClient("mock-token");
+
+        fetchMock.enqueue({
+            result: "success",
+            data: [
+                {
+                    uuid: "mb-uuid",
+                    hosting_id: 123,
+                    mailbox: "test",
+                    email: "test@test.com",
+                },
+            ],
+        });
+        await client.init();
+
+        // folders response with DRAFT role
+        fetchMock.enqueue({
+            result: "success",
+            data: [
+                { id: "inbox-id", name: "INBOX", role: "INBOX" },
+                { id: "draft-id", name: "Drafts", role: "DRAFT" },
+                { id: "sent-id", name: "Sent", role: "SENT" },
+            ],
+        });
+
+        // drafts messages
+        fetchMock.enqueue({
+            result: "success",
+            data: {
+                threads: [
+                    {
+                        uid: "t1",
+                        subject: "Draft 1",
+                        from: [],
+                        date: "2024",
+                        messages_count: 1,
+                        unseen_messages: 0,
+                        messages: [{ uid: "1@fid", preview: "..." }],
+                    },
+                ],
+            },
+        });
+
+        const drafts = await client.listDrafts();
+
+        const calls = fetchMock.calls();
+        assert.ok(calls[2].url.includes("draft-id"), "should query drafts folder");
+        assert.strictEqual(drafts.length, 1);
+        assert.strictEqual(drafts[0].subject, "Draft 1");
+    });
+
+    it("createDraft and sendDraft flow", async () => {
+        const client = new MailClient("mock-token");
+
+        fetchMock.enqueue({ result: "success", data: [{ uuid: "mb-uuid", email: "test@test.com", mailbox: "test", hosting_id: 123 }] });
+        await client.init();
+
+        // create draft
+        fetchMock.enqueue({ result: "success", data: { uuid: "draft-uuid", uid: "draft-uid" } });
+        // send draft
+        fetchMock.enqueue({ result: "success", data: { etop: "2024-01-01T00:00:00+00:00" } });
+
+        const draft = await client.createDraft("a@test.com", "Subject", "Body");
+        assert.strictEqual(draft.uuid, "draft-uuid");
+
+        const result = await client.sendDraft(draft.uuid);
+        assert.strictEqual(result.etop, "2024-01-01T00:00:00+00:00");
+    });
+
+    it("updateDraft modifies draft fields", async () => {
+        const client = new MailClient("mock-token");
+
+        fetchMock.enqueue({ result: "success", data: [{ uuid: "mb-uuid", email: "test@test.com", mailbox: "test", hosting_id: 123 }] });
+        await client.init();
+
+        // create draft
+        fetchMock.enqueue({ result: "success", data: { uuid: "draft-uuid", uid: "draft-uid" } });
+        const draft = await client.createDraft("a@test.com", "Original", "Body");
+
+        // update draft
+        fetchMock.enqueue({ result: "success", data: { uuid: "draft-uuid", uid: "draft-uid-updated" } });
+        const updated = await client.updateDraft(draft.uuid, { subject: "Updated", to: "b@test.com" });
+
+        assert.strictEqual(updated.subject, "Updated");
+        assert.strictEqual(updated.to, "b@test.com");
+    });
+
+    it("deleteDraft removes draft", async () => {
+        const client = new MailClient("mock-token");
+
+        fetchMock.enqueue({ result: "success", data: [{ uuid: "mb-uuid", email: "test@test.com", mailbox: "test", hosting_id: 123 }] });
+        await client.init();
+
+        fetchMock.enqueue({ result: "success", data: { uuid: "draft-uuid", uid: "draft-uid" } });
+        const draft = await client.createDraft("a@test.com", "To Delete", "Body");
+
+        // delete
+        fetchMock.enqueue({ result: "success", data: null });
+        const result = await client.deleteDraft(draft.uuid);
+
+        const calls = fetchMock.calls();
+        const last = calls[calls.length - 1];
+        assert.strictEqual(last.options.method, "DELETE");
+        assert.ok(last.url.includes("draft-uuid"));
     });
 });
